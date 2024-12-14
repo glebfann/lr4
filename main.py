@@ -1,24 +1,31 @@
-import tkinter as tk
-from tkinter import messagebox, simpledialog, filedialog
-import json
+# Стандартные библиотеки Python
+import io
 import os
+import sys
+import json
+import shutil
+import platform
 import re
+from sys import exit
+
+# Библиотеки для работы с Windows
+import winreg
+import wmi
+
+# Криптографические библиотеки
+import hashlib
 from Crypto.Cipher import AES
 from Crypto.Hash import MD2
-import io
 from Crypto.Util.Padding import pad, unpad
-from sys import exit
-import winreg
-import platform
-import wmi
-import hashlib
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
-import shutil
-from tkinter import filedialog
+
+# Библиотеки для GUI
+import tkinter as tk
+from tkinter import messagebox, simpledialog, filedialog
 
 class Installer:
-  def init(self):
+  def __init__(self):
       self.root = tk.Tk()
       self.root.withdraw()
       self.system_info = {}
@@ -107,7 +114,7 @@ class Installer:
       try:
           self.generate_keys()
           program_path = os.path.join(install_dir, "program.py")
-          shutil.copy2(file, program_path)  # Копируем текущий файл
+          shutil.copy2(__file__, program_path)  # Копируем текущий файл
           shutil.copy2("public_key.pem", os.path.join(install_dir, "public_key.pem"))
 
           self.collect_system_info()
@@ -157,7 +164,7 @@ def verify_installation():
       info_string = ''.join(str(value) for value in system_info.values())
       current_hash = hashlib.sha256(info_string.encode()).digest()
 
-      key_path = f"Software\{registry_name}"
+      key_path = f"Software\\{registry_name}"
       key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_READ)
       signature = winreg.QueryValueEx(key, "Signature")[0]
       winreg.CloseKey(key)
@@ -556,5 +563,6 @@ if __name__ == "__main__":
           root.quit()
       else:
           app = AppInterface(root)
+          on_opening()
           root.protocol("WM_DELETE_WINDOW", on_closing)
           root.mainloop()
