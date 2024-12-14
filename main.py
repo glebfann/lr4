@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import messagebox, simpledialog
+from tkinter import messagebox, simpledialog, filedialog
 import json
 import os
 import re
@@ -8,6 +8,180 @@ from Crypto.Hash import MD2
 import io
 from Crypto.Util.Padding import pad, unpad
 from sys import exit
+import winreg
+import platform
+import wmi
+import hashlib
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
+import shutil
+from tkinter import filedialog
+
+class Installer:
+  def init(self):
+      self.root = tk.Tk()
+      self.root.withdraw()
+      self.system_info = {}
+      self.private_key = None
+      self.public_key = None
+
+  def generate_keys(self):
+      private_key = rsa.generate_private_key(
+          public_exponent=65537,
+          key_size=2048
+      )
+      public_key = private_key.public_key()
+
+      with open("private_key.pem", "wb") as f:
+          f.write(private_key.private_bytes(
+              encoding=serialization.Encoding.PEM,
+              format=serialization.PrivateFormat.PKCS8,
+              encryption_algorithm=serialization.NoEncryption()
+          ))
+
+      with open("public_key.pem", "wb") as f:
+          f.write(public_key.public_bytes(
+              encoding=serialization.Encoding.PEM,
+              format=serialization.PublicFormat.SubjectPublicKeyInfo
+          ))
+
+      self.private_key = private_key
+      self.public_key = public_key
+
+  def collect_system_info(self):
+      c = wmi.WMI()
+
+      self.system_info = {
+          'username': os.getenv('USERNAME'),
+          'computer_name': platform.node(),
+          'windows_path': os.getenv('WINDIR'),
+          'system_path': os.getenv('SYSTEMROOT'),
+          'keyboard_info': '',
+          'screen_height': self.root.winfo_screenheight(),
+          'ram_size': 0,
+          'disk_serial': ''
+      }
+
+      for item in c.Win32_Keyboard():
+          self.system_info['keyboard_info'] = f"{item.Description} ({item.NumberOfFunctionKeys} function keys)"
+
+      for item in c.Win32_ComputerSystem():
+          self.system_info['ram_size'] = item.TotalPhysicalMemory
+
+      for item in c.Win32_DiskDrive():
+          self.system_info['disk_serial'] = item.SerialNumber
+          break
+
+  def hash_system_info(self):
+      info_string = ''.join(str(value) for value in self.system_info.values())
+      return hashlib.sha256(info_string.encode()).digest()
+
+  def sign_system_info(self, hashed_info):
+      signature = self.private_key.sign(
+          hashed_info,
+          padding.PSS(
+              mgf=padding.MGF1(hashes.SHA256()),
+              salt_length=padding.PSS.MAX_LENGTH
+          ),
+          hashes.SHA256()
+      )
+      return signature
+
+  def write_to_registry(self, signature):
+      try:
+          key_path = r"Software\Fandeev"
+          key = winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path)
+          winreg.SetValueEx(key, "Signature", 0, winreg.REG_BINARY, signature)
+          winreg.CloseKey(key)
+          return True
+      except Exception as e:
+          print(f"Ошибка при записи в реестр: {e}")
+          return False
+
+  def install(self):
+      install_dir = filedialog.askdirectory(title="Выберите директорию для установки")
+      if not install_dir:
+          messagebox.showerror("Ошибка", "Директория не выбрана")
+          return False
+
+      try:
+          self.generate_keys()
+          program_path = os.path.join(install_dir, "program.py")
+          shutil.copy2(file, program_path)  # Копируем текущий файл
+          shutil.copy2("public_key.pem", os.path.join(install_dir, "public_key.pem"))
+
+          self.collect_system_info()
+          hashed_info = self.hash_system_info()
+          signature = self.sign_system_info(hashed_info)
+
+          if not self.write_to_registry(signature):
+              messagebox.showerror("Ошибка", "Не удалось записать данные в реестр")
+              return False
+
+          messagebox.showinfo("Успех", "Установка завершена успешно")
+          return True
+
+      except Exception as e:
+          messagebox.showerror("Ошибка", f"Произошла ошибка при установке: {str(e)}")
+          return False
+
+def verify_installation():
+  try:
+      registry_name = simpledialog.askstring("Верификация", "Введите имя раздела реестра (фамилию):")
+      if not registry_name:
+          messagebox.showerror("Ошибка", "Имя раздела не указано")
+          return False
+
+      c = wmi.WMI()
+      system_info = {
+          'username': os.getenv('USERNAME'),
+          'computer_name': platform.node(),
+          'windows_path': os.getenv('WINDIR'),
+          'system_path': os.getenv('SYSTEMROOT'),
+          'keyboard_info': '',
+          'screen_height': root.winfo_screenheight(),
+          'ram_size': 0,
+          'disk_serial': ''
+      }
+
+      for item in c.Win32_Keyboard():
+          system_info['keyboard_info'] = f"{item.Description} ({item.NumberOfFunctionKeys} function keys)"
+
+      for item in c.Win32_ComputerSystem():
+          system_info['ram_size'] = item.TotalPhysicalMemory
+
+      for item in c.Win32_DiskDrive():
+          system_info['disk_serial'] = item.SerialNumber
+          break
+
+      info_string = ''.join(str(value) for value in system_info.values())
+      current_hash = hashlib.sha256(info_string.encode()).digest()
+
+      key_path = f"Software\{registry_name}"
+      key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_READ)
+      signature = winreg.QueryValueEx(key, "Signature")[0]
+      winreg.CloseKey(key)
+
+      with open("public_key.pem", "rb") as key_file:
+          public_key = serialization.load_pem_public_key(key_file.read())
+
+      try:
+          public_key.verify(
+              signature,
+              current_hash,
+              padding.PSS(
+                  mgf=padding.MGF1(hashes.SHA256()),
+                  salt_length=padding.PSS.MAX_LENGTH
+              ),
+              hashes.SHA256()
+          )
+          return True
+      except Exception:
+          return False
+
+  except Exception as e:
+      messagebox.showerror("Ошибка", f"Ошибка верификации: {str(e)}")
+      return False
 
 def get_key_from_passphrase(passphrase):
     hash_obj = MD2.new(passphrase.encode('utf-8'))
@@ -371,10 +545,16 @@ def on_opening():
         encrypt_file(json_data_in_memory, 'users_encrypted.dat', passphrase)
         messagebox.showinfo("Успех", f"Файл 'users_encrypted.dat' успешно создан и зашифрован.")
 
-
 if __name__ == "__main__":
-    root = tk.Tk()
-    app = AppInterface(root)
-    on_opening()
-    root.protocol("WM_DELETE_WINDOW", on_closing)
-    root.mainloop()
+  if len(sys.argv) > 1 and sys.argv[1] == "--install":
+      installer = Installer()
+      installer.install()
+  else:
+      root = tk.Tk()
+      if not verify_installation():
+          messagebox.showerror("Ошибка", "Проверка подлинности не пройдена")
+          root.quit()
+      else:
+          app = AppInterface(root)
+          root.protocol("WM_DELETE_WINDOW", on_closing)
+          root.mainloop()
